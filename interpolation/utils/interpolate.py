@@ -5,6 +5,8 @@ import cv2
 from json_update import fix_ramps_np, visualize_ramp_fix
 from morph import compute_optical_flow, morph_images
 from tqdm import tqdm
+from flwls_optical_flow import FlowSystem, FlowSystemConfig
+from flwls_optical_flow.temp_common_io import FlowSystemInput, FlowSystemOutput
 
 def read_image(path):
     img = cv2.imread(path)
@@ -34,6 +36,22 @@ def read_interpolation_values(json_dir):
                 print(f"Warning: No 'interpolation_value' in {filename}")
     return values
 
+def compute_flwls_optical_flow(img1,img2,algo='Raft'):
+    optical_flow = FlowSystem(FlowSystemConfig(
+        batch_size = 1,
+        model_name =algo,
+        flow_direction = "both",
+        device = "cuda",
+    ))
+    img1 = (img1*255).astype('uint8')
+    img2 = (img2*255).astype('uint8')
+    value = [FlowSystemInput(image=img1), FlowSystemInput(image=img2)]
+    output = list(optical_flow(value))[0]
+    output = output.to_dict()
+    forward = output['forward_flow'].transpose(2,1,0)
+    backward = output['backward_flow'].transpose(2,1,0)
+    return forward,backward
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--og", required=True, help="Path to original images folder")
@@ -58,9 +76,10 @@ if __name__ == "__main__":
         elif abs(update_interp_vals[idx]-1.0) < 1e-4:
             result = nr_img
         else:
-            print(idx)
-            flow_ab = compute_optical_flow(og_img, nr_img)
-            flow_ba = compute_optical_flow(nr_img, og_img)
+            # print(idx)
+            # flow_ab = compute_optical_flow(og_img, nr_img)
+            # flow_ba = compute_optical_flow(nr_img, og_img)
+            flow_ab,flow_ba = compute_flwls_optical_flow(og_img,nr_img,algo='FlowFormer++')
 
             result = morph_images(og_img, nr_img, flow_ab, flow_ba, update_interp_vals[idx])
         output_path = os.path.join(args.output_dir,file)

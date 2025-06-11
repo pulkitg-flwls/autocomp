@@ -28,7 +28,7 @@ def process_single_image(args):
     axs[0].axis('off')
 
     axs[1].imshow(opencv_img)
-    axs[1].set_title("OpenCV OF", fontsize=10)
+    axs[1].set_title("Flowformer++ OF", fontsize=10)
     axs[1].axis('off')
 
     axs[2].imshow((error_img*255).astype('uint8'),cmap='hot')

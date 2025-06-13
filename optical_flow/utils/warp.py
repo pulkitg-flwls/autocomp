@@ -44,6 +44,7 @@ def compute_flwls_optical_flow(img1,img2,algo='Raft'):
     output = output.to_dict()
     forward = output['forward_flow'].transpose(2,1,0)
     backward = output['backward_flow'].transpose(2,1,0)
+    print(forward.max(),forward.min())
     return forward,backward
 
 def flow_to_rgb(flow: np.ndarray) -> np.ndarray:
@@ -181,9 +182,9 @@ def main():
     axes[0].set_title("Plate A")
     axes[1].imshow(img_b)
     axes[1].set_title("Plate B")
-    axes[2].imshow(img_a_to_b_k)
+    axes[2].imshow(img_a_to_b_f)
     axes[2].set_title("A Warped to B")
-    axes[3].imshow(flow_rgb_k)
+    axes[3].imshow(flow_rgb_f)
     axes[3].set_title("Optical Flow A→B")
     for ax in axes: ax.axis("off")
     plt.tight_layout()

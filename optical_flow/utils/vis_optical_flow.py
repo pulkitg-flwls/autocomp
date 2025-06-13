@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument("--plate_b", type=str, help="Path to Plate B image (target)")
     parser.add_argument("--warp_img", type=str, help="")
     parser.add_argument("--gt", type=str, help="")
+    parser.add_argument("--flow_viz_dir", type=str, help="")
     parser.add_argument("--title", type=str, help="")
     parser.add_argument("--out_path", type=str, default="warped_output.png", help="Path to save output plot")
     args = parser.parse_args()
@@ -99,16 +100,17 @@ def highlight_misalignment_mask(gt_img, warp_img, threshold=0.02, highlight_colo
     return result
 
 def process_single_image(args):
-    dns_path,nr_path,warp_path,gt_path,out_path,title = args
+    dns_path,nr_path,warp_path,gt_path,out_path,flow_path,title = args
     img_a = read_image(dns_path)
     img_b = read_image(nr_path)
     warp_img = read_image(warp_path)
     gt_img = read_image(gt_path)
+    flow_img = read_image(flow_path)
     error_img,mse = compute_mse_image_and_score(gt_img, warp_img)
     ssim_error_img, ssim_score = compute_ssim_error_and_score(gt_img,warp_img)
-    flow_error_img, flow_error = compute_flow_magnitude(gt_img,warp_img)
+    # flow_error_img, flow_error = compute_flow_magnitude(gt_img,warp_img)
     overlay_error_img = highlight_misalignment_mask(gt_img,warp_img)
-
+    og_error_img,og_mse = compute_mse_image_and_score(img_a, img_b)
     # Plot and save results
     fig, axes = plt.subplots(2, 4, figsize=(20, 10))
     fig.suptitle(f"{title}", fontsize=16)
@@ -120,14 +122,16 @@ def process_single_image(args):
     axes[0,2].set_title("OG Warp NR")
     axes[0,3].imshow(gt_img)
     axes[0,3].set_title("Nuke GT Img")
-    axes[1,0].imshow(warp_img)
-    axes[1,0].set_title("OG Warp NR")
+    axes[1,0].imshow(og_error_img,cmap='hot')
+    axes[1,0].set_title(f"MSE Error(OG,NR) (1e-3):{og_mse*1000:.3f}")
     axes[1,1].imshow(error_img, cmap="hot")
-    axes[1,1].set_title(f"MSE Error (1e-3):{mse*1000:.3f}")
-    axes[1,2].imshow(ssim_error_img, cmap="hot")
-    axes[1,2].set_title(f"1-SSIM :{ssim_score:.3f}")
+    axes[1,1].set_title(f"MSE Error(OG Warp,Nuke) (1e-3):{mse*1000:.3f}")
+    # axes[1,2].imshow(ssim_error_img, cmap="hot")
+    # axes[1,2].set_title(f"1-SSIM :{ssim_score:.3f}")
+    axes[1,2].imshow(flow_img)
+    axes[1,2].set_title(f"Flow (OG,NR)")
     axes[1,3].imshow(overlay_error_img, cmap="hot")
-    axes[1,3].set_title("Overlay Img")
+    axes[1,3].set_title("Overlay Img thresh=0.02")
     for ax in axes.flat: ax.axis("off")
     plt.tight_layout()
     plt.savefig(out_path)
@@ -152,7 +156,8 @@ def image_pairs_generator(args):
         warp_path = os.path.join(args.warp_img,imgs)
         gt_path = os.path.join(args.gt,imgs)
         out_path = os.path.join(args.out_path,imgs)
-        yield(dns_path,nr_path,warp_path,gt_path,out_path,args.title)
+        flow_path = os.path.join(args.flow_viz_dir,imgs)
+        yield(dns_path,nr_path,warp_path,gt_path,out_path,flow_path,args.title)
 
 
 if __name__ == "__main__":

@@ -72,8 +72,9 @@ def arg_parse():
     args = parser.parse_args()
     return args
 
-def process_single_img(og_path,nr_path,output_path,vis_path,title):
+def process_single_img(args):
     
+    og_path,nr_path,output_path,vis_path,title = args
     img_a = read_image(og_path)
     img_b = read_image(nr_path)
     # blur_a, high_b,combined = low_high_combo(img_a, img_b, args.ksize)
@@ -86,7 +87,7 @@ def process_single_img(og_path,nr_path,output_path,vis_path,title):
     )
 
     # quick visual sanity check
-    fig, ax = plt.subplots(1, 5, figsize=(25, 5))
+    fig, ax = plt.subplots(1, 5, figsize=(20, 5))
     fig.suptitle(f"{title}", fontsize=16)
     for a in ax:
         a.axis("off")
@@ -125,4 +126,5 @@ if __name__ == "__main__":
         tasks.append((og_path, nr_path, output_path, vis_path, args.title))
 
     with Pool(cpu_count()) as pool:
-        list(tqdm(pool.starmap(process_single_img, tasks), total=len(tasks)))
+        for _ in tqdm(pool.imap_unordered(process_single_img, tasks), total=len(tasks), desc="Processing images"):
+            pass

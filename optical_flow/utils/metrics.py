@@ -16,6 +16,7 @@ import flip_evaluator as flip
 # import pyopenexr as exr
 import torch
 import lpips
+import json
 
 def parse_args():
     parser = ArgumentParser(description="Load image dataset")
@@ -25,6 +26,8 @@ def parse_args():
     parser.add_argument("--title",type=str,default="")
     parser.add_argument("--output_dir",type=str,default="")
     parser.add_argument("--face_detect",action='store_true')
+    parser.add_argument("--interpolation", required=True, help="Path to interpolation JSON folder")
+    
     args = parser.parse_args()
     return args
 
@@ -154,12 +157,45 @@ def process_single_image(args):
         print(f"Timeout: {grainy_path}")
         return None
 
+def read_interpolation_values(json_dir):
+    json_files = sorted(f for f in os.listdir(json_dir) if f.endswith(".json"))
+    values = []
+
+    for filename in json_files:
+        path = os.path.join(json_dir, filename)
+        with open(path, 'r') as f:
+            data = json.load(f)
+            val = data.get("interpolation_value", None)
+            if val is not None:
+                values.append(val)
+            else:
+                print(f"Warning: No 'interpolation_value' in {filename}")
+    return values
+
 def image_pairs_generator(args):
-    for imgs in sorted(os.listdir(args.dir1))[:90]:
+    for imgs in sorted(os.listdir(args.dir1)):
         grainy_path = os.path.join(args.dir1,imgs)
         regrain_path = os.path.join(args.dir2,imgs)
         yield(grainy_path,regrain_path)
 
+# def image_pairs_generator(args):
+#     """
+#     Yields (grainy_path, regrain_path) pairs only for frames whose
+#     corresponding interpolation value is non-zero.
+
+#     Assumes:
+#       • interp_vals is a list/array aligned with images named %06d.png,
+#         starting at 000001.png.
+#       • len(interp_vals) == number of images in args.dir1.
+#     """
+#     interp_vals = read_interpolation_values(args.interpolation)
+#     for idx, fname in enumerate(sorted(os.listdir(args.dir1))):
+#         if idx >= len(interp_vals) or interp_vals[idx] == 0:
+#             continue  # skip zero or out-of-range
+#         yield (
+#             os.path.join(args.dir1, fname),
+#             os.path.join(args.dir2, fname),
+#         )
 
 if __name__=="__main__":
     args = parse_args()
@@ -175,6 +211,7 @@ if __name__=="__main__":
         gen = image_pairs_generator(args)
         while True:
             batch = list(next(gen, None) for _ in range(batch_size))
+            
             batch = [b for b in batch if b is not None]  # Remove None values
 
             if not batch:

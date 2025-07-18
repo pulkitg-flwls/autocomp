@@ -55,18 +55,16 @@ def initialize_face_models(device='cuda:0', threshold=0.8):
     return face_detector, face_parser
 
 
-
-
 def nuke_blur(img, radius_x, radius_y, quality=15):
     """
     Gaussian blur that behaves like Nuke:
       • radius = size knob
-      • quality = 'don’t let the kernel be > quality px' speed trick
+      • quality = 'don't let the kernel be > quality px' speed trick
     """
     h, w = img.shape[:2]
     max_r = max(radius_x, radius_y)
 
-    # Down-sample if the requested radius is bigger than ‘quality’
+    # Down-sample if the requested radius is bigger than 'quality'
     if max_r > quality:
         scale = max_r / quality
         small = cv2.resize(img, None, fx=1/scale, fy=1/scale,
@@ -83,6 +81,165 @@ def nuke_blur(img, radius_x, radius_y, quality=15):
     return cv2.GaussianBlur(img, (0, 0), sig_x, sig_y)
 
 
+def build_gaussian_pyramid(img, levels=4, blur_radius=401, blur_quality=15):
+    """
+    Build Gaussian pyramid for an image using nuke_blur.
+    
+    Args:
+        img: Input image (float32, [0,1])
+        levels: Number of pyramid levels
+        blur_radius: Blur radius for nuke_blur
+        blur_quality: Quality parameter for nuke_blur
+    
+    Returns:
+        list: Gaussian pyramid levels
+    """
+    pyramid = [img.astype(np.float32)]
+    
+    for i in range(levels - 1):
+        # Use nuke_blur for consistent blurring
+        blurred = nuke_blur(pyramid[-1], radius_x=blur_radius, radius_y=blur_radius, quality=blur_quality)
+        # Downsample by factor of 2
+        downsampled = blurred[::2, ::2]
+        pyramid.append(downsampled)
+    
+    return pyramid
+
+
+def build_laplacian_pyramid(img, levels=4, blur_radius=401, blur_quality=15):
+    """
+    Build Laplacian pyramid for an image.
+    
+    Args:
+        img: Input image (float32, [0,1])
+        levels: Number of pyramid levels
+        blur_radius: Blur radius for nuke_blur
+        blur_quality: Quality parameter for nuke_blur
+    
+    Returns:
+        list: Laplacian pyramid levels
+    """
+    gaussian_pyramid = build_gaussian_pyramid(img, levels, blur_radius, blur_quality)
+    laplacian_pyramid = []
+    
+    for i in range(levels - 1):
+        # Upsample the next level
+        upsampled = cv2.resize(gaussian_pyramid[i + 1], 
+                              (gaussian_pyramid[i].shape[1], gaussian_pyramid[i].shape[0]),
+                              interpolation=cv2.INTER_LINEAR)
+        # Laplacian = current - upsampled
+        laplacian = gaussian_pyramid[i] - upsampled
+        laplacian_pyramid.append(laplacian)
+    
+    # Add the top level (smallest Gaussian)
+    laplacian_pyramid.append(gaussian_pyramid[-1])
+    
+    return laplacian_pyramid
+
+
+def reconstruct_from_laplacian_pyramid(laplacian_pyramid):
+    """
+    Reconstruct image from Laplacian pyramid.
+    
+    Args:
+        laplacian_pyramid: List of Laplacian pyramid levels
+    
+    Returns:
+        np.ndarray: Reconstructed image
+    """
+    levels = len(laplacian_pyramid)
+    reconstructed = laplacian_pyramid[-1].copy()
+    
+    for i in range(levels - 2, -1, -1):
+        # Upsample current reconstruction
+        upsampled = cv2.resize(reconstructed, 
+                              (laplacian_pyramid[i].shape[1], laplacian_pyramid[i].shape[0]),
+                              interpolation=cv2.INTER_LINEAR)
+        # Add Laplacian detail
+        reconstructed = upsampled + laplacian_pyramid[i]
+    
+    return reconstructed
+
+
+def combine_laplacian_pyramids(pyramid_a, pyramid_b, lip_mask=None, levels=4):
+    """
+    Combine two Laplacian pyramids using OG for low frequencies and NR for high frequencies.
+    
+    Args:
+        pyramid_a: Laplacian pyramid of OG image
+        pyramid_b: Laplacian pyramid of NR image
+        lip_mask: Optional lip mask for blending
+        levels: Number of pyramid levels
+    
+    Returns:
+        np.ndarray: Combined image
+    """
+    combined_pyramid = []
+    
+    for i in range(levels):
+        if i < levels - 1:
+            # High frequency levels: use NR details
+            combined_level = pyramid_b[i]
+        else:
+            # Low frequency level: use OG base
+            combined_level = pyramid_a[i]
+        
+        # Apply lip mask if provided (for high frequency levels)
+        if lip_mask is not None and i < levels - 1:
+            # Resize mask to match pyramid level
+            mask_resized = cv2.resize(lip_mask, 
+                                    (combined_level.shape[1], combined_level.shape[0]),
+                                    interpolation=cv2.INTER_LINEAR)
+            mask_3d = mask_resized[..., np.newaxis] if len(combined_level.shape) == 3 else mask_resized
+            
+            # Blend: mask * NR + (1-mask) * combined
+            combined_level = mask_3d * pyramid_b[i] + (1 - mask_3d) * combined_level
+        
+        combined_pyramid.append(combined_level)
+    
+    # Reconstruct from combined pyramid
+    return reconstruct_from_laplacian_pyramid(combined_pyramid)
+
+
+def laplacian_high_low_combo(img_a, img_b, lip_mask=None, levels=4, blur_radius=401, blur_quality=15):
+    """
+    Combine images using Laplacian pyramid decomposition.
+    
+    Args:
+        img_a: OG image (float32, [0,1])
+        img_b: NR image (float32, [0,1])
+        lip_mask: Optional lip mask for blending
+        levels: Number of pyramid levels
+        blur_radius: Blur radius for nuke_blur
+        blur_quality: Quality parameter for nuke_blur
+    
+    Returns:
+        tuple: (low_a, high_b, combined)
+    """
+    # Build Laplacian pyramids
+    pyramid_a = build_laplacian_pyramid(img_a, levels, blur_radius, blur_quality)
+    pyramid_b = build_laplacian_pyramid(img_b, levels, blur_radius, blur_quality)
+    
+    # Get low frequency component (base of OG pyramid)
+    low_a = pyramid_a[-1]
+    
+    # Get high frequency component (sum of all detail levels from NR)
+    high_b = np.zeros_like(img_b)
+    for i in range(levels - 1):
+        detail = pyramid_b[i]
+        # Resize detail to original size
+        detail_resized = cv2.resize(detail, (img_b.shape[1], img_b.shape[0]), 
+                                  interpolation=cv2.INTER_LINEAR)
+        high_b += detail_resized
+    
+    # Combine using pyramid reconstruction
+    combined = combine_laplacian_pyramids(pyramid_a, pyramid_b, lip_mask, levels)
+    
+    # Ensure values are in valid range
+    combined = np.clip(combined, 0.0, 1.0).astype(np.float32)
+    
+    return low_a, high_b, combined
+
 
 def read_image(path: str) -> np.ndarray:
     """Load an image and return it as float32 RGB in [0,1]."""
@@ -93,54 +250,29 @@ def read_image(path: str) -> np.ndarray:
     return img.astype(np.float32) / 255.0
 
 
-def low_high_combo(img_a,
-                   img_b,
-                   lip_mask=None,
-                   blur_radius=401,
-                   blur_quality=15,
-                    ):
-    """
-    Returns (low_a, high_b, combined).
-    All images assumed float32 RGB in [0,1] and same 1024×1024 size.
-    If lip_mask is provided, use feather blending strategy.
-    init 51.2
-    """
-    low_a   = nuke_blur(img_a, radius_x=blur_radius,radius_y=blur_radius, quality=blur_quality)
-    low_b = nuke_blur(img_a, radius_x=blur_radius,radius_y=blur_radius, quality=blur_quality)
-    high_b  = img_b.astype(np.float32) - low_b.astype(np.float32)
-    
-    if lip_mask is not None:
-        # Use feathered mask for smooth blending between lip and non-lip regions
-        mask_3d = lip_mask[..., np.newaxis]
-        # Blend: mask * NR + (1-mask) * (low_a + high_b)
-        combo = mask_3d * img_b + (1 - mask_3d) * np.clip(low_a + high_b, 0.0, 1.0)
-        combo = np.clip(combo, 0.0, 1.0).astype(np.float32)
-    else:
-        # Original combination
-        combo = np.clip(low_a + high_b, 0.0, 1.0).astype(np.float32)
-    
-    return low_a, high_b, combo
-
-
 def arg_parse():
     parser = argparse.ArgumentParser(
-        description="Blend blurred Image-A with high-freq details of Image-B."
+        description="Blend images using Laplacian pyramid decomposition."
     )
-    parser.add_argument("--og", required=True, help="First image (provides blur)")
-    parser.add_argument("--nr", required=True, help="Second image (provides details)")
+    parser.add_argument("--og", required=True, help="First image (provides low frequencies)")
+    parser.add_argument("--nr", required=True, help="Second image (provides high frequencies)")
     parser.add_argument("--gt", required=True, help="Ground truth image folder")
     parser.add_argument("--output_dir", default="test/combined.png", help="Output image path")
     parser.add_argument("--vis_dir", default="test/plot.png", help="Output image path")
-    parser.add_argument("--title", default="dpflow", help="Output image path")
+    parser.add_argument("--title", default="Laplacian Pyramid", help="Output image path")
     parser.add_argument("--dilation-kernel", type=int, default=15, help="Dilation kernel size (default=15)")
     parser.add_argument("--smooth-kernel", type=int, default=21, help="Smoothing kernel size (default=21)")
     parser.add_argument("--smooth-sigma", type=float, default=5.0, help="Gaussian blur sigma (default=5.0)")
+    parser.add_argument("--levels", type=int, default=4, help="Number of pyramid levels (default=4)")
+    parser.add_argument("--blur-radius", type=int, default=401, help="Blur radius for nuke_blur (default=401)")
+    parser.add_argument("--blur-quality", type=int, default=15, help="Quality parameter for nuke_blur (default=15)")
     args = parser.parse_args()
     return args
 
+
 def process_single_img(args):
     
-    og_path, nr_path, gt_path, output_path, vis_path, title, dilation_kernel, smooth_kernel, smooth_sigma = args
+    og_path, nr_path, gt_path, output_path, vis_path, title, dilation_kernel, smooth_kernel, smooth_sigma, levels, blur_radius, blur_quality = args
     
     # Initialize face models for this process
     face_detector, face_parser = initialize_face_models()
@@ -182,8 +314,8 @@ def process_single_img(args):
     # Read GT image
     img_gt = read_image(gt_path)
     
-    # Use lip mask in combination
-    blur_a, high_b, combined = low_high_combo(img_a, img_b, lip_mask=lip_mask)
+    # Use Laplacian pyramid combination
+    low_a, high_b, combined = laplacian_high_low_combo(img_a, img_b, lip_mask=lip_mask, levels=levels, blur_radius=blur_radius, blur_quality=blur_quality)
 
     # save
     cv2.imwrite(
@@ -208,11 +340,11 @@ def process_single_img(args):
     ax[0, 2].imshow(img_gt)
     ax[0, 2].set_title("GT Img")
     
-    # Second row: Blur OG, High NR (Masked), Combine
-    ax[1, 0].imshow(blur_a)
-    ax[1, 0].set_title("Blur OG")
+    # Second row: Low OG, High NR (Masked), Combine
+    ax[1, 0].imshow(low_a)
+    ax[1, 0].set_title("Low OG")
     
-    # Show high_b with masked lips: (1-mask)*high_b + mask*nr
+    # Show high_b with masked lips
     if lip_mask is not None:
         # Create masked version: (1-mask)*high_b + mask*nr
         mask_3d = lip_mask[..., np.newaxis]
@@ -250,8 +382,9 @@ if __name__ == "__main__":
         output_path = os.path.join(args.output_dir, file)
         vis_path = os.path.join(args.vis_dir, file)
         tasks.append((og_path, nr_path, gt_path, output_path, vis_path, args.title, 
-                     args.dilation_kernel, args.smooth_kernel, args.smooth_sigma))
+                     args.dilation_kernel, args.smooth_kernel, args.smooth_sigma, args.levels, 
+                     args.blur_radius, args.blur_quality))
 
     with Pool(cpu_count()) as pool:
         for _ in tqdm(pool.imap_unordered(process_single_img, tasks), total=len(tasks), desc="Processing images"):
-            pass
+            pass 

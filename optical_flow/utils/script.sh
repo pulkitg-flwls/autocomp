@@ -7,12 +7,12 @@ declare -a pairs=(
     # "vmdf02 vmdf02_ep01_pt03_0050"
     # "vmdf02 vmdf02_ep01_pt37_0320"
     # "vmdf02 vmdf02_ep01_pt22_0080"
-    "vmdf02 vmdf02_ep01_pt26_0250"
+    # "vmdf02 vmdf02_ep01_pt26_0250"
     # "vmdf02 vmdf02_ep01_pt45_0090"
     # "book01 book01_ep01_pt13_0090"
     # "book01 book01_ep01_pt10_0050"
     # "ufof01 ufof01_ep01_pt15_0030"
-    # "ufof01 ufof01_ep01_pt33_0240"
+    "ufof01 ufof01_ep01_pt33_0240"
     # "ufof01 ufof01_ep01_pt34_0100"
 )
 # Function to clear Python memory
@@ -25,8 +25,9 @@ gc.collect()
 sys.stdout.write('Memory cleared\n')
 "
 }
-Algo="dpflow"
-Data="spring"
+Algo="gmflow"
+Data="things"
+# Data="mixed"
 for pair in "${pairs[@]}"; do
     # Split the pair into DIR and EP
     DIR=$(echo $pair | cut -d' ' -f1)

@@ -126,7 +126,16 @@ def process_plates(args, model) -> None:
     for a_path, b_path in zip(a_paths, b_paths):
         img_a = cv.imread(str(a_path))
         img_b = cv.imread(str(b_path))
-
+        if args.denoise:
+            
+            img_b = cv.fastNlMeansDenoisingColored(
+                img_b,           # BGR np.ndarray
+                None,
+                h=12,                # 10–15 for heavy grain at 1 K
+                hColor=10,
+                templateWindowSize=7,
+                searchWindowSize=21
+            )
         preds = compute_flow(img_a, img_b, model, io_adapter, args.fp16)
         warped = warp_image(img_a, preds["flows"])
         save_pair_results(preds["flows_viz"], warped,
@@ -159,6 +168,9 @@ def args_parse():
     )
     parser.add_argument(
         "--fp16", action="store_true", help="If set, use half floating point precision."
+    )
+    parser.add_argument(
+        "--denoise", action="store_true", help="If set, denoise img."
     )
     parser.add_argument(
         "--input_size",
